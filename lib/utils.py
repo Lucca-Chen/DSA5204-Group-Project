@@ -7,6 +7,7 @@ import random
 from collections import defaultdict, deque
 import datetime
 import math
+from contextlib import nullcontext
 import torch
 import torch.distributed as dist
 import warnings
@@ -366,6 +367,26 @@ def is_main_process():
 def save_on_master(*args, **kwargs):
     if is_main_process():
         torch.save(*args, **kwargs)
+
+
+def get_amp_dtype(opt):
+    amp_dtype = getattr(opt, 'amp_dtype', 'bf16')
+    if amp_dtype == 'fp16':
+        return torch.float16
+    return torch.bfloat16
+
+
+def get_autocast_context(opt):
+    if (not getattr(opt, 'amp', 0)) or (not torch.cuda.is_available()):
+        return nullcontext()
+    return torch.autocast(device_type='cuda', dtype=get_amp_dtype(opt))
+
+
+def move_optimizer_to_device(optimizer, device):
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(device, non_blocking=True)
 
 
 def init_distributed_mode(args):

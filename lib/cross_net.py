@@ -107,6 +107,9 @@ class CrossSparseAggrNet_v2(nn.Module):
         self.hidden_dim = opt.embed_size  
         self.num_patches = opt.num_patches
 
+        self.use_sparse = getattr(opt, 'use_sparse', True)
+        self.use_aggr = getattr(opt, 'use_aggr', True)
+
         self.sparse_ratio = opt.sparse_ratio 
         self.aggr_ratio = opt.aggr_ratio 
 
@@ -114,16 +117,21 @@ class CrossSparseAggrNet_v2(nn.Module):
         self.ratio_weight = opt.ratio_weight
         
         # the number of aggregated patches
-        self.keeped_patches = int(self.num_patches * self.aggr_ratio * self.sparse_ratio)
+        keep_ratio = self.aggr_ratio * self.sparse_ratio if self.use_sparse else self.aggr_ratio
+        self.keeped_patches = max(1, int(self.num_patches * keep_ratio))
 
         # sparse network
-        self.sparse_net = TokenSparse(embed_dim=self.hidden_dim, 
-                                      sparse_ratio=self.sparse_ratio,
-                                      )
+        self.sparse_net = None
+        if self.use_sparse:
+            self.sparse_net = TokenSparse(embed_dim=self.hidden_dim,
+                                          sparse_ratio=self.sparse_ratio,
+                                          )
         # aggregation network
-        self.aggr_net= TokenAggregation(dim=self.hidden_dim, 
-                                        keeped_patches=self.keeped_patches,
-                                        )  
+        self.aggr_net = None
+        if self.use_aggr:
+            self.aggr_net = TokenAggregation(dim=self.hidden_dim,
+                                             keeped_patches=self.keeped_patches,
+                                             )
 
     def forward(self, img_embs, cap_embs, cap_lens):
 
@@ -148,12 +156,13 @@ class CrossSparseAggrNet_v2(nn.Module):
             img_spatial_embs = img_embs
             img_spatial_embs_norm = img_embs_norm
 
-        # compute self-attention 
-        with torch.no_grad():
-            # (B_v, L_v, C) ->  (B_v, 1, C)
-            img_spatial_glo_norm = F.normalize(img_spatial_embs.mean(dim=1, keepdim=True), dim=-1)
-            # (B_v, L_v, C) -> (B_v, L_v)
-            img_spatial_self_attention = (img_spatial_glo_norm * img_spatial_embs_norm).sum(dim=-1)
+        if self.use_sparse:
+            # compute self-attention
+            with torch.no_grad():
+                # (B_v, L_v, C) ->  (B_v, 1, C)
+                img_spatial_glo_norm = F.normalize(img_spatial_embs.mean(dim=1, keepdim=True), dim=-1)
+                # (B_v, L_v, C) -> (B_v, L_v)
+                img_spatial_self_attention = (img_spatial_glo_norm * img_spatial_embs_norm).sum(dim=-1)
 
         improve_sims = []
         score_mask_all = []
@@ -169,25 +178,33 @@ class CrossSparseAggrNet_v2(nn.Module):
             # (B_v, L_t, C)
             cap_i_expand = cap_embs_norm[i, :n_word, :].unsqueeze(0).repeat(B_v, 1, 1)
 
-            ## compute cross-attention
-            with torch.no_grad():               
-                # (L_t, C) -> (1, C) -> (1, 1, C)
-                cap_i_glo = F.normalize(cap_i.mean(0, keepdim=True).unsqueeze(0), dim=-1)
-                # (B_v, L_v, C) -> (B_v, L_v)
-                img_spatial_cap_i_attention = (cap_i_glo * img_spatial_embs_norm).sum(dim=-1)
+            if self.use_sparse:
+                ## compute cross-attention
+                with torch.no_grad():
+                    # (L_t, C) -> (1, C) -> (1, 1, C)
+                    cap_i_glo = F.normalize(cap_i.mean(0, keepdim=True).unsqueeze(0), dim=-1)
+                    # (B_v, L_v, C) -> (B_v, L_v)
+                    img_spatial_cap_i_attention = (cap_i_glo * img_spatial_embs_norm).sum(dim=-1)
 
-            # selection
-            select_tokens, extra_token, score_mask = self.sparse_net(tokens=img_spatial_embs, 
-                                                                     attention_x=img_spatial_self_attention, 
-                                                                    attention_y=img_spatial_cap_i_attention,
-                                                                    )
+                # selection
+                select_tokens, extra_token, score_mask = self.sparse_net(tokens=img_spatial_embs,
+                                                                         attention_x=img_spatial_self_attention,
+                                                                         attention_y=img_spatial_cap_i_attention,
+                                                                         )
+                score_mask_all.append(score_mask)
+            else:
+                select_tokens = img_spatial_embs
+                extra_token = None
 
             # aggregation
-            aggr_tokens = self.aggr_net(select_tokens)
-            # aggr_tokens = select_tokens
+            if self.use_aggr:
+                keep_spatial_tokens = self.aggr_net(select_tokens)
+            else:
+                keep_spatial_tokens = select_tokens
 
-            # add fusion token
-            keep_spatial_tokens = torch.cat([aggr_tokens, extra_token], dim=1)
+            # add fusion token only when sparse selection is enabled
+            if extra_token is not None:
+                keep_spatial_tokens = torch.cat([keep_spatial_tokens, extra_token], dim=1)
 
             # add [cls] token
             if self.has_cls_token:
@@ -205,11 +222,10 @@ class CrossSparseAggrNet_v2(nn.Module):
                                                )
             
             improve_sims.append(sim_one_text)
-            score_mask_all.append(score_mask)
 
         # (B_v, B_t)
         improve_sims = torch.cat(improve_sims, dim=1)
-        score_mask_all = torch.stack(score_mask_all, dim=0)
+        score_mask_all = torch.stack(score_mask_all, dim=0) if score_mask_all else None
 
         if self.training:
             return improve_sims, score_mask_all

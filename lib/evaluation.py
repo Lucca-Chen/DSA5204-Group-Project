@@ -6,10 +6,11 @@ import torch
 import numpy as np
 import sys
 from collections import OrderedDict
-from transformers import BertTokenizer
 
+import arguments
 from lib import utils
 from lib import image_caption
+from lib.tokenizers import get_tokenizer
 from lib.vse import VSEModel
 
 
@@ -94,7 +95,11 @@ def encode_data(model, data_loader, log_step=10, logging=logger.info):
         model.logger = val_logger
 
         # compute the embeddings
-        img_emb, cap_emb, lengths = model.forward_emb(images, captions, lengths)
+        with utils.get_autocast_context(model.opt):
+            img_emb, cap_emb, lengths = model.forward_emb(images, captions, lengths)
+
+        img_emb = img_emb.float()
+        cap_emb = cap_emb.float()
 
         if img_embs is None:
             # for local visual features
@@ -130,15 +135,12 @@ def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, s
 
     # load model and options
     checkpoint = torch.load(model_path, map_location='cuda')
-    opt = checkpoint['opt']
-    
-    opt.dataset = 'coco' if split == 'testall' else 'f30k'
+    opt = arguments.resolve_alignment_settings(checkpoint['opt'])
 
     logger.info(opt)
 
     # load vocabulary used by the model
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    # tokenizer = BertTokenizer.from_pretrained(opt.bert_path)
+    tokenizer = get_tokenizer(opt)
 
     # construct model
     if model is None:
@@ -325,7 +327,8 @@ def shard_attn_scores(model, img_embs, cap_embs, cap_lens, opt, gpu=False):
                 ca = cap_embs[ca_start:ca_end].cuda()
                 l = cap_lens[ca_start:ca_end].long().cuda()
 
-                sim = model.forward_sim(im, ca, l)
+                with utils.get_autocast_context(model.opt):
+                    sim = model.forward_sim(im, ca, l)
                 if not gpu:
                     sim = sim.cpu()
 

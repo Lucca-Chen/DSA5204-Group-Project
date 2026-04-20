@@ -3,7 +3,6 @@ import time
 import numpy as np
 import torch
 from lib import image_caption, utils
-from transformers import BertTokenizer
 import logging
 import tensorboard_logger as tb_logger
 import arguments
@@ -11,6 +10,7 @@ import arguments
 from lib import evaluation
 from lib.vse import VSEModel, create_optimizer
 from lib.evaluation import i2t, t2i, AverageMeter, LogCollector, encode_data, shard_attn_scores
+from lib.tokenizers import get_tokenizer
 from torch.nn.utils import clip_grad_norm_
 
 
@@ -18,10 +18,14 @@ def main():
 
     # Hyper Parameters    
     parser = arguments.get_argument_parser()
-    opt = parser.parse_args()
+    opt = arguments.resolve_alignment_settings(parser.parse_args())
     
     # the path of saving model ckpts and train logs
     opt.model_name = opt.logger_name  
+
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
 
     # Set GPU
     if opt.multi_gpu:
@@ -47,8 +51,7 @@ def main():
         tb_logger.configure(opt.logger_name, flush_secs=5)
 
     # tokenizer for texts
-    tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
-    # tokenizer = BertTokenizer.from_pretrained(opt.bert_path)
+    tokenizer = get_tokenizer(opt)
     # opt.vocab_size = len(tokenizer.vocab)
     # vocab_size of BERT model: 30522
     # print('vocab_size of BERT model:', opt.vocab_size)
@@ -58,17 +61,19 @@ def main():
     train_loader = image_caption.get_train_loader(opt, opt.data_path, tokenizer, opt.batch_size, opt.workers, 'train')
     print('Number of images for train-set:', train_loader.dataset.num_images)
 
-    # test-set
-    split = 'testall' if opt.dataset == 'coco' else 'test'
-    test_loader = image_caption.get_test_loader(opt, opt.data_path, tokenizer, opt.batch_size, opt.workers, split)
+    # validation set for model selection
+    val_loader = image_caption.get_test_loader(opt, opt.data_path, tokenizer, opt.batch_size, opt.workers, opt.val_split)
+    print('Number of images for {}-set:'.format(opt.val_split), val_loader.dataset.num_images)
 
     # load model
     model = VSEModel(opt).cuda()
 
     # get the optimizer
     optimizer = create_optimizer(opt, model)
+    scaler = torch.cuda.amp.GradScaler(enabled=bool(opt.amp and opt.amp_dtype == 'fp16'))
 
     start_epoch = 0
+    best_rsum = 0
 
     # multi-gpu
     if opt.multi_gpu:
@@ -82,7 +87,8 @@ def main():
     else:
         model_without_ddp = model
 
-    best_rsum = 0
+    if opt.resume:
+        start_epoch, best_rsum = resume_checkpoint(opt, model_without_ddp, optimizer, scaler)
     
     # Train the Model
     for epoch in range(start_epoch, opt.num_epochs):
@@ -101,10 +107,18 @@ def main():
             model_without_ddp.set_max_violation(max_violation=True)
 
         # train for one epoch
-        train(opt, train_loader, model, model_without_ddp, optimizer, epoch)
+        train(opt, train_loader, model, model_without_ddp, optimizer, scaler, epoch)
+
+        if utils.is_main_process() and opt.save_last_checkpoint:
+            state = {'model': model_without_ddp.state_dict(), 'opt': opt, 'epoch': epoch + 1,
+                     'best_rsum': best_rsum, 'Eiters': model_without_ddp.Eiters, 'optimizer': optimizer.state_dict(),
+                    }
+            if scaler.is_enabled():
+                state['scaler'] = scaler.state_dict()
+            save_checkpoint(state, is_best=False, prefix=opt.model_name, save_last=True)
             
         # evaluate on validation set
-        rsum = validate(opt, test_loader, model_without_ddp)
+        rsum = validate(opt, val_loader, model_without_ddp)
 
         if utils.is_main_process(): 
             # remember best results and save checkpoint
@@ -113,9 +127,11 @@ def main():
 
             logger.info("Epoch: [{}], Best rsum: {:.1f} \n".format(epoch, best_rsum))
             state = {'model': model_without_ddp.state_dict(), 'opt': opt, 'epoch': epoch + 1, 
-                     'best_rsum': best_rsum, 'Eiters': model_without_ddp.Eiters,
+                     'best_rsum': best_rsum, 'Eiters': model_without_ddp.Eiters, 'optimizer': optimizer.state_dict(),
                     }
-            save_checkpoint(state, is_best, prefix=opt.model_name)
+            if scaler.is_enabled():
+                state['scaler'] = scaler.state_dict()
+            save_checkpoint(state, is_best, prefix=opt.model_name, save_last=bool(opt.save_last_checkpoint))
 
         # waiting for synchronization
         if opt.multi_gpu:
@@ -138,25 +154,24 @@ def main():
         # Save the final results for computing ensemble results
         save_path = os.path.join(base, 'results_{}.npy'.format(opt.dataset))
 
-        if opt.dataset == 'coco':
+        if opt.dataset == 'coco' and opt.test_split == 'testall':
             # Evaluate COCO 5-fold 1K
-            evaluation.evalrank(model_path, model=model_without_ddp, split='testall', fold5=True)
+            evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=True)
 
             # Evaluate COCO 5K
-            evaluation.evalrank(model_path, model=model_without_ddp, split='testall', fold5=False, save_path=save_path)
+            evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=False, save_path=save_path)
 
             if opt.evaluate_cxc:
                 # Evaluate COCO-trained models on CxC
-                evaluation.evalrank(model_path, model=model_without_ddp, split='testall', fold5=True, cxc=True)
+                evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=True, cxc=True)
 
         else:
-            # Evaluate Flickr30K
-            evaluation.evalrank(model_path, model=model_without_ddp, split='test', fold5=False, save_path=save_path)
+            evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=False, save_path=save_path)
 
         logger.info('Evaluation finish!')    
 
 
-def train(opt, train_loader, model, model_without_ddp, optimizer, epoch):
+def train(opt, train_loader, model, model_without_ddp, optimizer, scaler, epoch):
 
     # switch to train mode
     model.train()   
@@ -177,7 +192,7 @@ def train(opt, train_loader, model, model_without_ddp, optimizer, epoch):
 
     for i, train_data in enumerate(train_loader):  
         
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
 
         # warmup_alpha is [0, 1], loss = loss * warmup_alpha
         warmup_alpha = float(i) / n_batch if epoch == opt.embedding_warmup_epochs else 1. 
@@ -193,17 +208,24 @@ def train(opt, train_loader, model, model_without_ddp, optimizer, epoch):
         lengths = lengths.cuda(non_blocking=True) 
         img_ids = img_ids.cuda(non_blocking=True) 
 
-        loss = model(images, captions, lengths, img_ids=img_ids, warmup_alpha=warmup_alpha)
+        with utils.get_autocast_context(opt):
+            loss = model(images, captions, lengths, img_ids=img_ids, warmup_alpha=warmup_alpha)
 
         if torch.isnan(loss) or torch.isinf(loss):
             loss = torch.zeros([], requires_grad=True, device=images.device)
 
-        loss.backward()
-
-        if opt.grad_clip > 0:
-            clip_grad_norm_(model.parameters(), opt.grad_clip)
-
-        optimizer.step()
+        if scaler.is_enabled():
+            scaler.scale(loss).backward()
+            if opt.grad_clip > 0:
+                scaler.unscale_(optimizer)
+                clip_grad_norm_(model.parameters(), opt.grad_clip)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            if opt.grad_clip > 0:
+                clip_grad_norm_(model.parameters(), opt.grad_clip)
+            optimizer.step()
 
         batch_time.update(time.time() - end)
         end = time.time()    
@@ -310,10 +332,37 @@ def validate(opt, val_loader, model):
         return currscore
 
 
-def save_checkpoint(state, is_best, filename='checkpoint.pth', prefix=''):
+def save_checkpoint(state, is_best, filename='checkpoint.pth', prefix='', save_last=True):
 
+    if save_last:
+        torch.save(state, os.path.join(prefix, 'checkpoint_last.pth'))
     if is_best:
         torch.save(state, os.path.join(prefix, 'model_best.pth'))
+
+
+def resume_checkpoint(opt, model, optimizer, scaler):
+    logger = logging.getLogger(__name__)
+
+    device_id = opt.gpu if opt.multi_gpu else opt.gpu_id
+    device = torch.device('cuda', device_id)
+    checkpoint = torch.load(opt.resume, map_location='cpu')
+
+    model.load_state_dict(checkpoint['model'], strict=False)
+
+    start_epoch = checkpoint.get('epoch', 0)
+    best_rsum = checkpoint.get('best_rsum', 0)
+    model.Eiters = checkpoint.get('Eiters', 0)
+
+    if 'optimizer' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer'])
+        utils.move_optimizer_to_device(optimizer, device)
+
+    if scaler.is_enabled() and ('scaler' in checkpoint):
+        scaler.load_state_dict(checkpoint['scaler'])
+
+    logger.info('Resumed from {} at epoch {} with best rsum {:.1f}'.format(opt.resume, start_epoch, best_rsum))
+
+    return start_epoch, best_rsum
 
 
 def adjust_learning_rate(opt, optimizer, epoch):

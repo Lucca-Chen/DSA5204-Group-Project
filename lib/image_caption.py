@@ -6,6 +6,7 @@ import random
 import json
 import logging
 import lib.utils as utils
+from lib import tokenizers as tokenizer_utils
 from PIL import Image, ImageFile
 
 ImageFile.LOAD_TRUNCATED_IMAGES = True
@@ -13,10 +14,14 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 logger = logging.getLogger(__name__)
 
 
-def build_transforms(img_size=224, is_train=True):
+def build_transforms(img_size=224, is_train=True, is_clip=False):
 
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
+    if is_clip:
+        mean = [0.48145466, 0.4578275, 0.40821073]
+        std = [0.26862954, 0.26130258, 0.27577711]
+    else:
+        mean = [0.485, 0.456, 0.406]
+        std = [0.229, 0.224, 0.225]
 
     if not is_train:
         transform = T.Compose([
@@ -68,7 +73,11 @@ class RawImageDataset(data.Dataset):
             image_ids = f.readlines()
             self.images = [int(x.strip()) for x in image_ids]
 
-        self.preprocess = build_transforms(img_size=opt.img_res, is_train=train)
+        self.preprocess = build_transforms(
+            img_size=opt.img_res,
+            is_train=train,
+            is_clip=('clip' in getattr(opt, 'vit_type', '')),
+        )
         
         self.length = len(self.captions)
         self.num_images = len(self.images)
@@ -81,11 +90,7 @@ class RawImageDataset(data.Dataset):
         
         img_index = index // self.im_div
         caption = self.captions[index]
-
-        caption_tokens = self.tokenizer.basic_tokenizer.tokenize(caption)  
-            
-        # Convert caption (string) to word ids (with Size Augmentation at training time).
-        target = process_caption_bert(self.tokenizer, caption_tokens, self.train, size_augment=self.opt.size_augment)
+        target = tokenizer_utils.process_caption(self.tokenizer, caption, self.opt, train=self.train)
 
         image_id = self.images[img_index]
   
@@ -100,89 +105,28 @@ class RawImageDataset(data.Dataset):
         return self.length
 
 
-def process_caption_bert(tokenizer, tokens, train=True, mask_rate=0.2, size_augment=True):
+def build_collate_fn(tokenizer):
+    pad_token_id = tokenizer_utils.get_pad_token_id(tokenizer)
 
-    output_tokens = []
-    deleted_idx = []
+    def collate_fn_ours(data):
+        # Sort a data list by caption length, for GRU/BERT/CLIP text encoder.
+        data.sort(key=lambda x: len(x[1]), reverse=True)
 
-    for i, token in enumerate(tokens):
+        images, captions, ids, img_ids = zip(*data)
 
-        # the sentence is tokenized twice 
-        # text -> basic token (basic_tokenizer.tokenize) -> sub_token (wordpiece_tokenizer.tokenize)
-        sub_tokens = tokenizer.wordpiece_tokenizer.tokenize(token)
+        img_ids = torch.tensor(img_ids)
+        ids = torch.tensor(ids)
+        images = torch.stack(images, 0)
 
-        prob = random.random()
+        lengths = torch.tensor([len(cap) for cap in captions])
+        targets = torch.full((len(captions), int(max(lengths))), fill_value=pad_token_id, dtype=torch.long)
+        for i, cap in enumerate(captions):
+            end = lengths[i]
+            targets[i, :end] = cap[:end]
 
-        # first, 20% probability use the augmenation operations
-        if size_augment and prob < mask_rate and train:  # mask/remove the tokens only during training
-            prob /= mask_rate
+        return images, targets, lengths, ids, img_ids
 
-            # 50% change token to mask token
-            if prob < 0.5:
-                for sub_token in sub_tokens:
-                    output_tokens.append("[MASK]")
-            # 10% randomly change token to random token from the BERT-vocab
-            elif prob < 0.6:
-                for sub_token in sub_tokens:
-                    output_tokens.append(random.choice(list(tokenizer.vocab.keys())))
-                    
-            # -> 40% delete the token
-            else:
-                for sub_token in sub_tokens:
-                    output_tokens.append(sub_token)
-                    # record the index of sub_token
-                    deleted_idx.append(len(output_tokens) - 1)
-        
-        # 80% probability keep the token
-        else:
-            for sub_token in sub_tokens:
-                # no masking token (will be ignored by loss function later)
-                output_tokens.append(sub_token)
-
-    if len(deleted_idx) != 0:
-        output_tokens = [output_tokens[i] for i in range(len(output_tokens)) if i not in deleted_idx]
-
-    # and first and last notations for BERT model
-    output_tokens = ['[CLS]'] + output_tokens + ['[SEP]']
-
-    # Convert each token to vocabulary indices
-    # [PAD] -> 0
-    # [UNK] -> 100
-    # [CLS] -> 101
-    # [SEP] -> 102
-    # [MASK] -> 103
-    target = tokenizer.convert_tokens_to_ids(output_tokens)
-
-    # convert to the torch.Tensor, torch.int64 (long)
-    target = torch.tensor(target)
-
-    return target
-
-
-def collate_fn_ours(data):
-
-    # Sort a data list by caption length, for GRU/BERT
-    data.sort(key=lambda x: len(x[1]), reverse=True)
-
-    images, captions, ids, img_ids = zip(*data)
-
-    # img label
-    img_ids = torch.tensor(img_ids)
-    # cap label (five captions with one image)
-    ids = torch.tensor(ids)
-    
-    images = torch.stack(images, 0)
-
-    # Merget captions (convert tuple of 1D tensor to 2D tensor)
-    lengths = torch.tensor([len(cap) for cap in captions])
-
-    targets = torch.zeros(len(captions), max(lengths)).long()
-
-    for i, cap in enumerate(captions):
-        end = lengths[i]
-        targets[i, :end] = cap[:end]
-
-    return images, targets, lengths, ids, img_ids
+    return collate_fn_ours
 
 
 def get_loader(opt, data_path, split, tokenizer, 
@@ -191,7 +135,7 @@ def get_loader(opt, data_path, split, tokenizer,
                ):
 
     dataset = RawImageDataset(opt, data_path, split, tokenizer, train)
-    collate_fn = collate_fn_ours
+    collate_fn = build_collate_fn(tokenizer)
 
     # DDP with multi GPUS
     # only for train_loader

@@ -1,0 +1,9 @@
+.venv
+__pycache__/
+lib/__pycache__/
+runs
+output/
+*.pyc
+*.pyo
+*.o*
+scripts/plot_f30k_shared_results.py

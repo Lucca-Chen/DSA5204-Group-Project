@@ -3,11 +3,13 @@ import torch.nn as nn
 import torch.nn.init
 import lib.utils as utils
 import logging
+import arguments
 
 from lib.encoders import get_image_encoder, get_text_encoder
 from lib.loss import loss_select
 
 from lib.cross_net import CrossSparseAggrNet_v2
+from lib.sim_heads import build_similarity_head, chan_mean_similarity, global_similarity, scan_similarity
 
 logger = logging.getLogger(__name__)
 
@@ -16,18 +18,20 @@ class VSEModel(nn.Module):
     def __init__(self, opt):
         super().__init__()
 
-        self.opt = opt
+        self.opt = arguments.resolve_alignment_settings(opt)
 
-        self.img_enc = get_image_encoder(opt)
-        self.txt_enc = get_text_encoder(opt)
+        self.img_enc = get_image_encoder(self.opt)
+        self.txt_enc = get_text_encoder(self.opt)
 
-        self.criterion = loss_select(opt, loss_type=opt.loss)
+        self.criterion = loss_select(self.opt, loss_type=self.opt.loss)
+        self.sim_head = self.opt.sim_head
+        self.sim_head_module = build_similarity_head(self.opt)
 
         # iteration
         self.Eiters = 0
 
-        # sparse + aggregation model
-        self.cross_net = CrossSparseAggrNet_v2(opt)
+        # sparse + aggregation model for patch-word max-mean matching
+        self.cross_net = CrossSparseAggrNet_v2(self.opt) if self.sim_head == 'max_mean' else None
 
     def freeze_backbone(self):
         self.img_enc.freeze_backbone()
@@ -60,8 +64,22 @@ class VSEModel(nn.Module):
     # compute the similarity on cross-attention interaction
     def forward_sim(self, img_embs, cap_embs, cap_lens):
 
-        sims = self.cross_net(img_embs, cap_embs, cap_lens)
+        if self.sim_head == 'max_mean':
+            return self.cross_net(img_embs, cap_embs, cap_lens)
 
+        if self.sim_head == 'global':
+            sims = global_similarity(img_embs, cap_embs, cap_lens)
+        elif self.sim_head in ('scan_t2i', 'scan_i2t', 'scan_all'):
+            sims = scan_similarity(img_embs, cap_embs, cap_lens, scan_mode=self.sim_head)
+        elif self.sim_head == 'chan_mean':
+            sims = chan_mean_similarity(img_embs, cap_embs, cap_lens)
+        elif self.sim_head_module is not None:
+            sims = self.sim_head_module(img_embs, cap_embs, cap_lens)
+        else:
+            raise ValueError('Invalid sim_head {}'.format(self.sim_head))
+
+        if self.training:
+            return sims, None
         return sims
 
     # One training step given images and captions
@@ -97,8 +115,11 @@ class VSEModel(nn.Module):
         # basic alignment loss
         align_loss = self.criterion(img_emb, cap_emb, img_ids, improved_sims) * warmup_alpha
         
-        # ratio_loss
-        ratio_loss = (score_mask_all.mean() - self.opt.sparse_ratio) ** 2
+        # ratio_loss is only meaningful when sparse token selection is enabled.
+        if self.opt.use_ratio_loss and score_mask_all is not None:
+            ratio_loss = (score_mask_all.mean() - self.opt.sparse_ratio) ** 2
+        else:
+            ratio_loss = torch.zeros([], device=align_loss.device)
         
         loss = align_loss + self.opt.ratio_weight * ratio_loss
 
@@ -135,10 +156,14 @@ def create_optimizer(opt, model):
     ]
 
     # cross-moadl alignment 
-    params_list += [
-        {'params': model.cross_net.parameters(), 'lr': opt.learning_rate * cross_lr_rate},
-        {'params': model.criterion.parameters(), 'lr': opt.learning_rate},
-    ]   
+    if model.cross_net is not None:
+        params_list.append({'params': model.cross_net.parameters(), 'lr': opt.learning_rate * cross_lr_rate})
+    if model.sim_head_module is not None:
+        sim_head_params = list(model.sim_head_module.parameters())
+        if sim_head_params:
+            params_list.append({'params': sim_head_params, 'lr': opt.learning_rate * cross_lr_rate})
+
+    params_list.append({'params': model.criterion.parameters(), 'lr': opt.learning_rate})
   
     optimizer = torch.optim.AdamW(params_list, lr=opt.learning_rate, weight_decay=decay_factor)
     
@@ -148,5 +173,3 @@ def create_optimizer(opt, model):
 if __name__ == '__main__':
 
     pass
-
-

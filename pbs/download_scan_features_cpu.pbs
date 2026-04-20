@@ -1,0 +1,70 @@
+#!/bin/bash
+#PBS -N scan-feat
+#PBS -q cpu_serial
+#PBS -l select=1:ncpus=2:mem=16gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+DEST_ROOT="${DEST_ROOT:-/scratch/e1553870/precomp}"
+ZIP_PATH="${ZIP_PATH:-${DEST_ROOT}/scan-features.zip}"
+EXTRACT_ROOT="${EXTRACT_ROOT:-${DEST_ROOT}/scan-features}"
+LOG_ROOT="${LOG_ROOT:-${DEST_ROOT}/logs}"
+
+mkdir -p "${DEST_ROOT}" "${LOG_ROOT}"
+
+LOG_PREFIX="${LOG_ROOT}/scan-features-${PBS_JOBID:-manual}"
+exec > >(tee -a "${LOG_PREFIX}.out") 2> >(tee -a "${LOG_PREFIX}.err" >&2)
+
+echo "[download_scan_features_cpu] start=$(date -Is)"
+echo "[download_scan_features_cpu] host=$(hostname)"
+echo "[download_scan_features_cpu] jobid=${PBS_JOBID:-manual}"
+
+if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+  cd "${PBS_O_WORKDIR}"
+fi
+
+export PATH="${HOME}/.local/bin:${PATH}"
+export KAGGLE_CONFIG_DIR="${HOME}/.kaggle"
+export PYTHONUNBUFFERED=1
+
+if [[ ! -f "${KAGGLE_CONFIG_DIR}/kaggle.json" ]]; then
+  echo "Missing ${KAGGLE_CONFIG_DIR}/kaggle.json" >&2
+  exit 1
+fi
+
+if ! command -v kaggle >/dev/null 2>&1; then
+  python3 -m pip install --user kaggle
+fi
+
+echo "[download_scan_features_cpu] kaggle=$(command -v kaggle)"
+kaggle --version
+
+if [[ ! -f "${ZIP_PATH}" ]]; then
+  echo "[download_scan_features_cpu] downloading zip to ${ZIP_PATH}"
+  kaggle datasets download -d kuanghueilee/scan-features -p "${DEST_ROOT}"
+  if [[ -f "${DEST_ROOT}/scan-features.zip" && "${DEST_ROOT}/scan-features.zip" != "${ZIP_PATH}" ]]; then
+    mv "${DEST_ROOT}/scan-features.zip" "${ZIP_PATH}"
+  fi
+else
+  echo "[download_scan_features_cpu] zip already exists, skipping download"
+fi
+
+ls -lh "${ZIP_PATH}"
+
+if [[ ! -d "${EXTRACT_ROOT}/data/data" ]]; then
+  echo "[download_scan_features_cpu] extracting zip to ${EXTRACT_ROOT}"
+  mkdir -p "${EXTRACT_ROOT}"
+  unzip -oq "${ZIP_PATH}" -d "${EXTRACT_ROOT}"
+else
+  echo "[download_scan_features_cpu] extract root already exists, skipping unzip"
+fi
+
+echo "[download_scan_features_cpu] extracted directories:"
+find "${EXTRACT_ROOT}" -maxdepth 3 -type d | sort
+
+echo "[download_scan_features_cpu] key files:"
+find "${EXTRACT_ROOT}" -maxdepth 4 -type f | rg 'f30k_precomp|coco_precomp|vocab' | sed -n '1,80p' || true
+
+echo "[download_scan_features_cpu] done=$(date -Is)"

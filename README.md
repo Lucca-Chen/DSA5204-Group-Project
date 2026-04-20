@@ -88,7 +88,47 @@ You need to modify the batch size according to the hardware conditions, and we a
 Besides, considering the GPU-memory limitation, we don't integrate the Gumbel-softmax sampling for the patch selection in the repository. 
 The performances are not affected much but GPU-memory is reduced a lot (see more details in the paper).
 
+### Shared-backbone fair comparison
+
+To support controlled comparisons under the same raw-image pipeline and ViT/Swin + BERT backbone, we provide shared-backbone presets through `--model_variant`.
+
+- `vsepp_shared`: global image pooling + global text pooling.
+- `scan_shared`: SCAN-style cross-attention over the same image patches and BERT tokens.
+- `sgr_shared`: SGR-style similarity reasoning over shared ViT/Swin patches and BERT tokens.
+- `chan_shared`: CHAN-style hard patch-word assignment with mean pooling.
+- `basealign`: patch-word max-mean matching without sparse token selection or aggregation.
+- `sparse`: `basealign` + sparse token selection.
+- `laps`: the default full model with sparse token selection, token aggregation, and ratio regularization.
+
+The preset automatically sets `--alignment_mode` and `--sim_head`. By default, training now uses `dev` for validation and `test` / `testall` for final reporting. You can still override `--use_sparse`, `--use_aggr`, `--use_ratio_loss`, `--sim_head`, `--val_split`, or `--test_split` manually if needed.
+
+Example on ViT + Flickr30K:
+
+```bash
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_vsepp_shared --batch_size 64 --vit_type vit --embed_size 512 --model_variant vsepp_shared
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_scan_shared --batch_size 64 --vit_type vit --embed_size 512 --model_variant scan_shared
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_sgr_shared --batch_size 64 --vit_type vit --embed_size 512 --model_variant sgr_shared
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_chan_shared --batch_size 64 --vit_type vit --embed_size 512 --model_variant chan_shared
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_basealign --batch_size 64 --vit_type vit --embed_size 512 --model_variant basealign
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_sparse --batch_size 64 --vit_type vit --embed_size 512 --model_variant sparse --sparse_ratio 0.5
+python train.py --dataset f30k --gpu-id 0 --logger_name runs/f30k_laps --batch_size 64 --vit_type vit --embed_size 512 --model_variant laps --sparse_ratio 0.5 --aggr_ratio 0.4
 ```
+
+For PBS clusters, we also provide:
+
+- `pbs/train_f30k_shared_backbone.pbs`: one shared job template.
+- `pbs/submit_f30k_shared_backbone_chain.sh`: submit the five Flickr30K fair-comparison runs sequentially.
+
+```bash
+cd ./DSA5204-Group-Project
+
+# safer default for unknown GPU memory
+BATCH_SIZE=32 NUM_EPOCHS=30 ./pbs/submit_f30k_shared_backbone_chain.sh
+
+# if your GPU has enough memory, this is closer to the paper setup
+BATCH_SIZE=64 NUM_EPOCHS=30 ./pbs/submit_f30k_shared_backbone_chain.sh
+```
+
 ## single GPU
 
 ### vit + f30k 
@@ -119,6 +159,59 @@ CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.run --nproc_per_node=4 
 ### swin + coco
 CUDA_VISIBLE_DEVICES=0,1,2 python -m torch.distributed.run --nproc_per_node=3 train.py --dataset coco --multi_gpu 1 --logger_name runs/coco_swin --batch_size 72 --vit_type swin --embed_size 512 --sparse_ratio 0.8 --aggr_ratio 0.6
 CUDA_VISIBLE_DEVICES=0,1,2,3 python -m torch.distributed.run --nproc_per_node=4 train.py --dataset coco --multi_gpu 1 --logger_name runs/coco_swin --batch_size 64 --vit_type swin --embed_size 512 --sparse_ratio 0.8 --aggr_ratio 0.6
+```
+
+## Detector Features and Table 3 Utilities
+
+The repository also includes PBS utilities for the detector-based baselines and the CLIP-based zero-shot grounding evaluation.
+
+### Download pre-computed Faster R-CNN features
+
+```bash
+qsub ./pbs/download_scan_features_cpu.pbs
+```
+
+This script downloads the SCAN-style precomputed region features used by methods such as HREM, TGDT, and detector-based CHAN.
+
+### Download Table 3 grounding data
+
+```bash
+qsub ./pbs/download_grounding_data_cpu.pbs
+```
+
+This script downloads COCO `train2014` together with the `RefCOCO`, `RefCOCO+`, and `RefCOCOg` annotations required for the zero-shot grounding evaluation.
+
+### Train CLIP-based retrieval models for Table 3
+
+The Table 3 experiments use CLIP ViT-B/16 backbones trained on Flickr30K. The PBS template below reuses `train.py` with CLIP image and text encoders.
+
+```bash
+qsub -q batch_gpu -v MODEL_VARIANT=vsepp_shared ./pbs/train_f30k_clip_table3.pbs
+qsub -q batch_gpu -v MODEL_VARIANT=scan_shared ./pbs/train_f30k_clip_table3.pbs
+qsub -q batch_gpu -v MODEL_VARIANT=sgr_shared ./pbs/train_f30k_clip_table3.pbs
+qsub -q batch_gpu -v MODEL_VARIANT=laps ./pbs/train_f30k_clip_table3.pbs
+```
+
+### Evaluate zero-shot grounding for Table 3
+
+The grounding evaluator supports both vanilla CLIP and trained retrieval checkpoints.
+
+```bash
+# vanilla CLIP row
+qsub -q gpu -v MODEL_TYPE=vanilla_clip ./pbs/eval_table3_grounding.pbs
+
+# trained rows
+qsub -q gpu -v MODEL_TYPE=checkpoint,MODEL_VARIANT=vsepp_shared ./pbs/eval_table3_grounding.pbs
+qsub -q gpu -v MODEL_TYPE=checkpoint,MODEL_VARIANT=scan_shared ./pbs/eval_table3_grounding.pbs
+qsub -q gpu -v MODEL_TYPE=checkpoint,MODEL_VARIANT=sgr_shared ./pbs/eval_table3_grounding.pbs
+qsub -q gpu -v MODEL_TYPE=checkpoint,MODEL_VARIANT=laps ./pbs/eval_table3_grounding.pbs
+```
+
+For convenience, the helper script below can submit the full training or evaluation batch:
+
+```bash
+./pbs/submit_table3_jobs.sh train_all
+./pbs/submit_table3_jobs.sh eval_all
 ```
 
 ## Evaluation
@@ -155,4 +248,3 @@ We provide the training logs, checkpoints, performances, and hyper-parameters.
   year={2024}
 }
 ```
-

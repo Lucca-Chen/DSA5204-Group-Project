@@ -1,0 +1,132 @@
+#!/bin/bash
+#PBS -N laps-f30k
+#PBS -q batch_gpu
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:gpu-type=nvidia
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-/nfs/home/svu/e1553870/DSA5204-Group-Project}"
+VENV_PATH="${VENV_PATH:-${REPO_ROOT}/.venv}"
+RUNS_ROOT="${RUNS_ROOT:-/scratch/e1553870/DSA5204-Group-Project/runs}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/e1553870/DSA5204-Group-Project/output/laps_f30k_shared}"
+
+MODEL_VARIANT="${MODEL_VARIANT:-laps}"
+RUN_SUFFIX="${RUN_SUFFIX:-}"
+RUN_NAME="${RUN_NAME:-f30k_${MODEL_VARIANT}${RUN_SUFFIX}}"
+DATASET="${DATASET:-f30k}"
+DATA_PATH="${DATA_PATH:-data/}"
+GPU_ID="${GPU_ID:-0}"
+VIT_TYPE="${VIT_TYPE:-vit}"
+EMBED_SIZE="${EMBED_SIZE:-512}"
+BATCH_SIZE="${BATCH_SIZE:-32}"
+NUM_EPOCHS="${NUM_EPOCHS:-30}"
+WORKERS="${WORKERS:-8}"
+SEED="${SEED:-0}"
+VAL_SPLIT="${VAL_SPLIT:-dev}"
+TEST_SPLIT="${TEST_SPLIT:-test}"
+F30K_IMG_PATH="${F30K_IMG_PATH:-/scratch/e1553870/datasets/flickr30k-images}"
+AMP="${AMP:-0}"
+AMP_DTYPE="${AMP_DTYPE:-bf16}"
+SAVE_LAST_CHECKPOINT="${SAVE_LAST_CHECKPOINT:-1}"
+RESUME_PATH="${RESUME_PATH:-auto}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
+
+mkdir -p "${RUNS_ROOT}" "${OUTPUT_ROOT}"
+
+LOG_PREFIX="${OUTPUT_ROOT}/${RUN_NAME}-${PBS_JOBID:-manual}"
+exec > >(tee -a "${LOG_PREFIX}.out") 2> >(tee -a "${LOG_PREFIX}.err" >&2)
+
+echo "[train_f30k_shared_backbone] start=$(date -Is)"
+echo "[train_f30k_shared_backbone] host=$(hostname)"
+echo "[train_f30k_shared_backbone] jobid=${PBS_JOBID:-manual}"
+echo "[train_f30k_shared_backbone] variant=${MODEL_VARIANT} run=${RUN_NAME}"
+
+if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+  cd "${PBS_O_WORKDIR}"
+fi
+
+if [[ ! -f "${VENV_PATH}/bin/activate" ]]; then
+  echo "Missing virtualenv at ${VENV_PATH}" >&2
+  exit 1
+fi
+
+source "${VENV_PATH}/bin/activate"
+
+export PYTHONUNBUFFERED=1
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION:-python}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-8}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-8}"
+export TMPDIR="${TMPDIR:-/scratch/e1553870/tmp}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/scratch/e1553870/.cache}"
+export HF_HOME="${HF_HOME:-/scratch/e1553870/.cache/huggingface}"
+export TORCH_HOME="${TORCH_HOME:-/scratch/e1553870/.cache/torch}"
+
+mkdir -p "${TMPDIR}" "${XDG_CACHE_HOME}" "${HF_HOME}" "${TORCH_HOME}"
+
+cd "${REPO_ROOT}"
+
+echo "[train_f30k_shared_backbone] python=$(command -v python)"
+python --version
+echo "[train_f30k_shared_backbone] protobuf_impl=${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION}"
+nvidia-smi -L || true
+
+LOGGER_NAME="${RUNS_ROOT}/${RUN_NAME}"
+
+if [[ "${RESUME_PATH}" == "auto" ]]; then
+  CANDIDATE_RESUME="${LOGGER_NAME}/checkpoint_last.pth"
+  if [[ -f "${CANDIDATE_RESUME}" ]]; then
+    RESUME_PATH="${CANDIDATE_RESUME}"
+  else
+    RESUME_PATH=""
+  fi
+fi
+
+if [[ -z "${EXTRA_ARGS}" ]]; then
+  case "${MODEL_VARIANT}" in
+    sparse)
+      EXTRA_ARGS="--sparse_ratio 0.5"
+      ;;
+    laps)
+      EXTRA_ARGS="--sparse_ratio 0.5 --aggr_ratio 0.4"
+      ;;
+  esac
+fi
+
+CMD=(
+  python train.py
+  --dataset "${DATASET}"
+  --data_path "${DATA_PATH}"
+  --gpu-id "${GPU_ID}"
+  --logger_name "${LOGGER_NAME}"
+  --batch_size "${BATCH_SIZE}"
+  --num_epochs "${NUM_EPOCHS}"
+  --workers "${WORKERS}"
+  --seed "${SEED}"
+  --vit_type "${VIT_TYPE}"
+  --embed_size "${EMBED_SIZE}"
+  --amp "${AMP}"
+  --amp_dtype "${AMP_DTYPE}"
+  --save_last_checkpoint "${SAVE_LAST_CHECKPOINT}"
+  --model_variant "${MODEL_VARIANT}"
+  --val_split "${VAL_SPLIT}"
+  --test_split "${TEST_SPLIT}"
+  --f30k_img_path "${F30K_IMG_PATH}"
+)
+
+if [[ -n "${RESUME_PATH}" ]]; then
+  CMD+=(--resume "${RESUME_PATH}")
+fi
+
+if [[ -n "${EXTRA_ARGS}" ]]; then
+  read -r -a EXTRA_ARRAY <<< "${EXTRA_ARGS}"
+  CMD+=("${EXTRA_ARRAY[@]}")
+fi
+
+echo "[train_f30k_shared_backbone] command=${CMD[*]}"
+"${CMD[@]}"
+
+echo "[train_f30k_shared_backbone] done=$(date -Is)"
