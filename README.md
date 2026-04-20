@@ -214,6 +214,82 @@ For convenience, the helper script below can submit the full training or evaluat
 ./pbs/submit_table3_jobs.sh eval_all
 ```
 
+## Additional Lightweight Retrieval Datasets
+
+The repository now supports two lightweight extension datasets:
+
+- `iapr_tc12`
+- `rsicd`
+
+The runtime expects the same normalized caption format used by `f30k` and `coco`:
+
+```text
+data/<dataset>/
+├── train_ids.txt
+├── train_caps.txt
+├── train_capimgids.txt
+├── dev_ids.txt
+├── dev_caps.txt
+├── dev_capimgids.txt
+├── test_ids.txt
+├── test_caps.txt
+├── test_capimgids.txt
+└── id_mapping.json
+```
+
+Two preparation scripts convert common raw releases into this format.
+
+### Prepare IAPR TC-12
+
+```bash
+qsub ./pbs/prepare_iapr_tc12_cpu.pbs
+```
+
+Useful overrides:
+
+```bash
+qsub -v RAW_ROOT=/scratch/e1553870/datasets/iapr_tc12_raw,IMAGE_ROOT=/scratch/e1553870/datasets/iapr_tc12/images,ANNOTATION_FILE=/scratch/e1553870/datasets/iapr_tc12_raw/annotations.tsv ./pbs/prepare_iapr_tc12_cpu.pbs
+```
+
+### Prepare RSICD
+
+```bash
+qsub ./pbs/prepare_rsicd_cpu.pbs
+```
+
+Useful overrides:
+
+```bash
+qsub -v ANNOTATION_JSON=/scratch/e1553870/datasets/rsicd_raw/dataset_rsicd.json,IMAGE_ROOT=/scratch/e1553870/datasets/rsicd/images ./pbs/prepare_rsicd_cpu.pbs
+```
+
+### Train on IAPR TC-12 or RSICD
+
+Use the shared-backbone PBS template below for both datasets.
+
+```bash
+qsub -v DATASET=iapr_tc12,MODEL_VARIANT=laps,VIT_TYPE=vit ./pbs/train_extra_dataset_shared_backbone.pbs
+qsub -v DATASET=rsicd,MODEL_VARIANT=laps,VIT_TYPE=vit ./pbs/train_extra_dataset_shared_backbone.pbs
+```
+
+The same template also supports `vsepp_shared`, `scan_shared`, `sgr_shared`, and `chan_shared`, and can be switched to Swin with `VIT_TYPE=swin`.
+
+### Evaluate on IAPR TC-12 or RSICD
+
+```bash
+qsub -v DATASET=iapr_tc12,MODEL_VARIANT=laps,VIT_TYPE=vit ./pbs/eval_extra_dataset_shared_backbone.pbs
+qsub -v DATASET=rsicd,MODEL_VARIANT=laps,VIT_TYPE=vit ./pbs/eval_extra_dataset_shared_backbone.pbs
+```
+
+For convenience, the helper below submits the full five-row shared-backbone table for either dataset:
+
+```bash
+./pbs/submit_extra_dataset_jobs.sh train_all iapr_tc12
+./pbs/submit_extra_dataset_jobs.sh eval_all iapr_tc12
+./pbs/submit_extra_dataset_jobs.sh train_all rsicd
+./pbs/submit_extra_dataset_jobs.sh eval_all rsicd
+```
+
 ## Evaluation
 Run ```eval.py``` to evaluate the trained models on f30k or coco datasets, and you need to specify the model paths.
 

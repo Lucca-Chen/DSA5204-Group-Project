@@ -83,6 +83,7 @@ def encode_data(model, data_loader, log_step=10, logging=logger.info):
     # np array to keep all the embeddings
     img_embs = None
     cap_embs = None
+    cap_img_ids = None
     
     # compute the number of max word
     max_n_word = model.opt.max_word
@@ -108,6 +109,7 @@ def encode_data(model, data_loader, log_step=10, logging=logger.info):
             cap_embs = torch.zeros((len(data_loader.dataset), max_n_word, cap_emb.size(2)))
             
             cap_lens = torch.zeros(len(data_loader.dataset)).long()
+            cap_img_ids = torch.zeros(len(data_loader.dataset)).long()
 
         # cache embeddings
         img_embs[ids] = img_emb.cpu()
@@ -116,6 +118,7 @@ def encode_data(model, data_loader, log_step=10, logging=logger.info):
         
         cap_embs[ids, :n_word, :] = cap_emb[:, :n_word, :].cpu()
         cap_lens[ids] = lengths.cpu()
+        cap_img_ids[ids] = img_ids.cpu()
 
         # measure elapsed time
         batch_time.update(time.time() - end)
@@ -128,7 +131,40 @@ def encode_data(model, data_loader, log_step=10, logging=logger.info):
                 .format(i, len(data_loader.dataset) // data_loader.batch_size + 1, batch_time=batch_time, e_log=str(model.logger)))
         del images, captions
 
-    return img_embs, cap_embs, cap_lens
+    return img_embs, cap_embs, cap_lens, cap_img_ids
+
+
+def build_caption_groups(cap_img_ids, n_images=None):
+
+    if isinstance(cap_img_ids, torch.Tensor):
+        cap_img_ids = cap_img_ids.cpu().numpy()
+    cap_img_ids = np.asarray(cap_img_ids, dtype=np.int64)
+
+    if n_images is None:
+        n_images = int(cap_img_ids.max()) + 1 if cap_img_ids.size > 0 else 0
+
+    groups = [np.where(cap_img_ids == image_index)[0] for image_index in range(n_images)]
+    return groups
+
+
+def select_unique_images(img_embs, cap_img_ids, n_images=None):
+
+    if isinstance(cap_img_ids, torch.Tensor):
+        cap_img_ids = cap_img_ids.cpu().numpy()
+    cap_img_ids = np.asarray(cap_img_ids, dtype=np.int64)
+
+    if n_images is None:
+        n_images = int(cap_img_ids.max()) + 1 if cap_img_ids.size > 0 else 0
+
+    keep = []
+    for image_index in range(n_images):
+        indices = np.where(cap_img_ids == image_index)[0]
+        if len(indices) == 0:
+            raise ValueError('Missing captions for image index {}'.format(image_index))
+        keep.append(indices[0])
+
+    keep = np.asarray(keep, dtype=np.int64)
+    return img_embs[keep]
 
 
 def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, save_path=None):
@@ -155,16 +191,17 @@ def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, s
 
     logger.info('Computing results...')
     with torch.no_grad():
-        img_embs, cap_embs, cap_lens = encode_data(model, data_loader)
+        img_embs, cap_embs, cap_lens, cap_img_ids = encode_data(model, data_loader)
 
-    # one image to five captions, since have repetitive images
-    logger.info('Images: %d, Captions: %d' % (img_embs.shape[0] / 5, cap_embs.shape[0]))
+    n_images = int(cap_img_ids.max().item()) + 1 if len(cap_img_ids) > 0 else 0
+    logger.info('Images: %d, Captions: %d' % (n_images, cap_embs.shape[0]))
 
     # for F30K, imgs 1000, captions 5000.
     # for COCO, imgs 5000, captions 25000. (5-fold is five times of 1000 imgs)
 
     if not fold5:
-        img_embs = img_embs[::5]
+        caption_groups = build_caption_groups(cap_img_ids, n_images=n_images)
+        img_embs = select_unique_images(img_embs, cap_img_ids, n_images=n_images)
         
         start = time.time()
         sims = shard_attn_scores(model, img_embs, cap_embs, cap_lens, opt).numpy()
@@ -179,8 +216,8 @@ def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, s
 
         logger.info("calculate similarity time: {}".format(end - start))
 
-        r, rt = i2t(npts, sims, return_ranks=True)
-        ri, rti = t2i(npts, sims, return_ranks=True)
+        r, rt = i2t(npts, sims, return_ranks=True, caption_groups=caption_groups)
+        ri, rti = t2i(npts, sims, return_ranks=True, cap_img_ids=cap_img_ids.cpu().numpy())
 
         # r[0] -> R@1, r[1] -> R@5, r[2] -> R@10
         ar = (r[0] + r[1] + r[2]) / 3
@@ -230,27 +267,27 @@ def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, s
         logger.info("Text to image (R@1, R@5, R@10): %.1f %.1f %.1f" % mean_metrics[5:8])
 
 
-def i2t(npts, sims, return_ranks=False, mode='coco'):
+def i2t(npts, sims, return_ranks=False, mode='coco', caption_groups=None):
 
     ranks = np.zeros(npts)
     top1 = np.zeros(npts)
 
+    if caption_groups is None:
+        if mode == 'coco':
+            caption_groups = [np.arange(5 * index, 5 * index + 5) for index in range(npts)]
+        else:
+            caption_groups = [np.asarray([index]) for index in range(npts)]
+
     for index in range(npts):
         
         inds = np.argsort(sims[index])[::-1]
-
-        if mode == 'coco':
-            rank = 1e20
-            for i in range(5 * index, 5 * index + 5, 1):
-                tmp = np.where(inds == i)[0][0]
-                if tmp < rank:
-                    rank = tmp
-            ranks[index] = rank
-            top1[index] = inds[0]
-        else:
-            rank = np.where(inds == index)[0][0]
-            ranks[index] = rank
-            top1[index] = inds[0]
+        rank = 1e20
+        for caption_index in caption_groups[index]:
+            tmp = np.where(inds == caption_index)[0][0]
+            if tmp < rank:
+                rank = tmp
+        ranks[index] = rank
+        top1[index] = inds[0]
 
     # Compute metrics
     r1 = 100.0 * len(np.where(ranks < 1)[0]) / len(ranks)
@@ -265,28 +302,26 @@ def i2t(npts, sims, return_ranks=False, mode='coco'):
         return (r1, r5, r10, medr, meanr)
 
 
-def t2i(npts, sims, return_ranks=False, mode='coco'):
+def t2i(npts, sims, return_ranks=False, mode='coco', cap_img_ids=None):
 
-    if mode == 'coco':
-        ranks = np.zeros(5 * npts)
-        top1 = np.zeros(5 * npts)
-    else:
-        ranks = np.zeros(npts)
-        top1 = np.zeros(npts)
+    if cap_img_ids is None:
+        if mode == 'coco':
+            cap_img_ids = np.repeat(np.arange(npts), 5)
+        else:
+            cap_img_ids = np.arange(npts)
+    cap_img_ids = np.asarray(cap_img_ids, dtype=np.int64)
+
+    ranks = np.zeros(len(cap_img_ids))
+    top1 = np.zeros(len(cap_img_ids))
 
     # --> (5N(caption), N(image))
     sims = sims.T
 
-    for index in range(npts):
-        if mode == 'coco':
-            for i in range(5):
-                inds = np.argsort(sims[5 * index + i])[::-1]
-                ranks[5 * index + i] = np.where(inds == index)[0][0]
-                top1[5 * index + i] = inds[0]
-        else:
-            inds = np.argsort(sims[index])[::-1]
-            ranks[index] = np.where(inds == index)[0][0]
-            top1[index] = inds[0]
+    for caption_index in range(len(cap_img_ids)):
+        inds = np.argsort(sims[caption_index])[::-1]
+        image_index = cap_img_ids[caption_index]
+        ranks[caption_index] = np.where(inds == image_index)[0][0]
+        top1[caption_index] = inds[0]
 
     # Compute metrics
     r1 = 100.0 * len(np.where(ranks < 1)[0]) / len(ranks)

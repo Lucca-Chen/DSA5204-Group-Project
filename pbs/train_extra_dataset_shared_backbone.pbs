@@ -1,0 +1,123 @@
+#!/bin/bash
+#PBS -N extra-train
+#PBS -q batch_gpu
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:gpu-type=nvidia
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-/nfs/home/svu/e1553870/DSA5204-Group-Project}"
+VENV_PATH="${VENV_PATH:-${REPO_ROOT}/.venv}"
+RUNS_ROOT="${RUNS_ROOT:-/scratch/e1553870/DSA5204-Group-Project/runs_extra}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-/scratch/e1553870/DSA5204-Group-Project/output/extra_train}"
+
+DATASET="${DATASET:-iapr_tc12}"
+MODEL_VARIANT="${MODEL_VARIANT:-laps}"
+RUN_SUFFIX="${RUN_SUFFIX:-}"
+VIT_TYPE="${VIT_TYPE:-vit}"
+RUN_NAME="${RUN_NAME:-${DATASET}_${MODEL_VARIANT}_${VIT_TYPE}${RUN_SUFFIX}}"
+DATA_PATH="${DATA_PATH:-data/}"
+GPU_ID="${GPU_ID:-0}"
+EMBED_SIZE="${EMBED_SIZE:-512}"
+BATCH_SIZE="${BATCH_SIZE:-64}"
+NUM_EPOCHS="${NUM_EPOCHS:-30}"
+WORKERS="${WORKERS:-8}"
+SEED="${SEED:-0}"
+VAL_SPLIT="${VAL_SPLIT:-dev}"
+TEST_SPLIT="${TEST_SPLIT:-test}"
+IAPR_IMG_PATH="${IAPR_IMG_PATH:-/scratch/e1553870/datasets/iapr_tc12/images}"
+RSICD_IMG_PATH="${RSICD_IMG_PATH:-/scratch/e1553870/datasets/rsicd/images}"
+AMP="${AMP:-1}"
+AMP_DTYPE="${AMP_DTYPE:-bf16}"
+SAVE_LAST_CHECKPOINT="${SAVE_LAST_CHECKPOINT:-1}"
+RESUME_PATH="${RESUME_PATH:-auto}"
+EXTRA_ARGS="${EXTRA_ARGS:-}"
+
+mkdir -p "${RUNS_ROOT}" "${OUTPUT_ROOT}"
+
+LOG_PREFIX="${OUTPUT_ROOT}/${RUN_NAME}-${PBS_JOBID:-manual}"
+exec > >(tee -a "${LOG_PREFIX}.out") 2> >(tee -a "${LOG_PREFIX}.err" >&2)
+
+if [[ -n "${PBS_O_WORKDIR:-}" ]]; then
+  cd "${PBS_O_WORKDIR}"
+fi
+
+source "${VENV_PATH}/bin/activate"
+
+export PYTHONUNBUFFERED=1
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION="${PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION:-python}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-8}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-8}"
+export TMPDIR="${TMPDIR:-/scratch/e1553870/tmp}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-/scratch/e1553870/.cache}"
+export HF_HOME="${HF_HOME:-/scratch/e1553870/.cache/huggingface}"
+export TORCH_HOME="${TORCH_HOME:-/scratch/e1553870/.cache/torch}"
+
+mkdir -p "${TMPDIR}" "${XDG_CACHE_HOME}" "${HF_HOME}" "${TORCH_HOME}"
+
+cd "${REPO_ROOT}"
+
+LOGGER_NAME="${RUNS_ROOT}/${RUN_NAME}"
+
+if [[ "${RESUME_PATH}" == "auto" ]]; then
+  CANDIDATE_RESUME="${LOGGER_NAME}/checkpoint_last.pth"
+  if [[ -f "${CANDIDATE_RESUME}" ]]; then
+    RESUME_PATH="${CANDIDATE_RESUME}"
+  else
+    RESUME_PATH=""
+  fi
+fi
+
+if [[ -z "${EXTRA_ARGS}" ]]; then
+  case "${MODEL_VARIANT}:${VIT_TYPE}" in
+    sparse:vit)
+      EXTRA_ARGS="--sparse_ratio 0.5"
+      ;;
+    sparse:swin)
+      EXTRA_ARGS="--sparse_ratio 0.8"
+      ;;
+    laps:vit)
+      EXTRA_ARGS="--sparse_ratio 0.5 --aggr_ratio 0.4"
+      ;;
+    laps:swin)
+      EXTRA_ARGS="--sparse_ratio 0.8 --aggr_ratio 0.6"
+      ;;
+  esac
+fi
+
+CMD=(
+  python train.py
+  --dataset "${DATASET}"
+  --data_path "${DATA_PATH}"
+  --gpu-id "${GPU_ID}"
+  --logger_name "${LOGGER_NAME}"
+  --batch_size "${BATCH_SIZE}"
+  --num_epochs "${NUM_EPOCHS}"
+  --workers "${WORKERS}"
+  --seed "${SEED}"
+  --vit_type "${VIT_TYPE}"
+  --embed_size "${EMBED_SIZE}"
+  --amp "${AMP}"
+  --amp_dtype "${AMP_DTYPE}"
+  --save_last_checkpoint "${SAVE_LAST_CHECKPOINT}"
+  --model_variant "${MODEL_VARIANT}"
+  --val_split "${VAL_SPLIT}"
+  --test_split "${TEST_SPLIT}"
+  --iapr_img_path "${IAPR_IMG_PATH}"
+  --rsicd_img_path "${RSICD_IMG_PATH}"
+)
+
+if [[ -n "${RESUME_PATH}" ]]; then
+  CMD+=(--resume "${RESUME_PATH}")
+fi
+
+if [[ -n "${EXTRA_ARGS}" ]]; then
+  read -r -a EXTRA_ARRAY <<< "${EXTRA_ARGS}"
+  CMD+=("${EXTRA_ARRAY[@]}")
+fi
+
+echo "[train_extra_dataset_shared_backbone] command=${CMD[*]}"
+"${CMD[@]}"

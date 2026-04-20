@@ -14,6 +14,14 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 logger = logging.getLogger(__name__)
 
 
+DATASET_IMAGE_BASES = {
+    'f30k': 'f30k_img_path',
+    'coco': 'coco_img_path',
+    'iapr_tc12': 'iapr_img_path',
+    'rsicd': 'rsicd_img_path',
+}
+
+
 def build_transforms(img_size=224, is_train=True, is_clip=False):
 
     if is_clip:
@@ -56,7 +64,10 @@ class RawImageDataset(data.Dataset):
         # coco: 119287 imgs, 
         loc = os.path.join(opt.data_path, opt.dataset)
 
-        self.image_base = opt.f30k_img_path if opt.dataset == 'f30k' else opt.coco_img_path
+        image_base_key = DATASET_IMAGE_BASES.get(opt.dataset)
+        if image_base_key is None:
+            raise ValueError('Unsupported dataset {}'.format(opt.dataset))
+        self.image_base = getattr(opt, image_base_key)
 
         with open(os.path.join(loc, 'id_mapping.json'), 'r') as f:
             self.id_to_path = json.load(f)
@@ -73,6 +84,24 @@ class RawImageDataset(data.Dataset):
             image_ids = f.readlines()
             self.images = [int(x.strip()) for x in image_ids]
 
+        capimgids_path = os.path.join(loc, '{}_capimgids.txt'.format(self.split))
+        if os.path.isfile(capimgids_path):
+            with open(capimgids_path, 'r') as f:
+                self.caption_image_indices = [int(line.strip()) for line in f if line.strip()]
+        else:
+            if len(self.images) == 0:
+                self.caption_image_indices = []
+            elif len(self.images) == len(self.captions):
+                self.caption_image_indices = list(range(len(self.captions)))
+            elif len(self.captions) % len(self.images) == 0:
+                captions_per_image = len(self.captions) // len(self.images)
+                self.caption_image_indices = [index // captions_per_image for index in range(len(self.captions))]
+            else:
+                raise ValueError(
+                    'Cannot infer caption-to-image mapping for {} {}. '
+                    'Expected {}_capimgids.txt in {}'.format(opt.dataset, self.split, self.split, loc)
+                )
+
         self.preprocess = build_transforms(
             img_size=opt.img_res,
             is_train=train,
@@ -81,14 +110,18 @@ class RawImageDataset(data.Dataset):
         
         self.length = len(self.captions)
         self.num_images = len(self.images)
-
-        self.im_div = 5 if self.num_images != self.length else 1
+        if len(self.caption_image_indices) != self.length:
+            raise ValueError(
+                'Caption/image mapping length mismatch for {} {}: {} captions vs {} mappings'.format(
+                    opt.dataset, self.split, self.length, len(self.caption_image_indices)
+                )
+            )
             
         print(opt.dataset, self.split)
 
     def __getitem__(self, index):
         
-        img_index = index // self.im_div
+        img_index = self.caption_image_indices[index]
         caption = self.captions[index]
         target = tokenizer_utils.process_caption(self.tokenizer, caption, self.opt, train=self.train)
 

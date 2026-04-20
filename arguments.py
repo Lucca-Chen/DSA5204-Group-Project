@@ -70,6 +70,14 @@ DATASET_SPLITS = {
         'val_split': 'dev',
         'test_split': 'testall',
     },
+    'iapr_tc12': {
+        'val_split': 'dev',
+        'test_split': 'test',
+    },
+    'rsicd': {
+        'val_split': 'dev',
+        'test_split': 'test',
+    },
 }
 
 
@@ -78,7 +86,7 @@ def get_argument_parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_path', default='data/', type=str, help='path to datasets')
-    parser.add_argument('--dataset', default='f30k', help='dataset coco or f30k')
+    parser.add_argument('--dataset', default='f30k', help='dataset name, e.g. f30k, coco, iapr_tc12, or rsicd')
 
     parser.add_argument('--margin', default=0.2, type=float, help='Rank loss margin.')
     parser.add_argument('--num_epochs', default=30, type=int, help='Number of training epochs.')
@@ -100,6 +108,10 @@ def get_argument_parser():
     
     parser.add_argument('--f30k_img_path', type=str, default='/home/fzr/data/flickr30k-images', help='the path of f30k images') 
     parser.add_argument('--coco_img_path', type=str, default='/home/fzr/data/coco/', help='the path of coco images') 
+    parser.add_argument('--iapr_img_path', type=str, default='/scratch/e1553870/datasets/iapr_tc12/images',
+                        help='the path of IAPR TC-12 images')
+    parser.add_argument('--rsicd_img_path', type=str, default='/scratch/e1553870/datasets/rsicd/images',
+                        help='the path of RSICD images')
     
     # vision transformer
     parser.add_argument('--img_res', type=int, default=224, help='the image resolution for ViT input') 

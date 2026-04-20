@@ -9,7 +9,16 @@ import arguments
 
 from lib import evaluation
 from lib.vse import VSEModel, create_optimizer
-from lib.evaluation import i2t, t2i, AverageMeter, LogCollector, encode_data, shard_attn_scores
+from lib.evaluation import (
+    i2t,
+    t2i,
+    AverageMeter,
+    LogCollector,
+    encode_data,
+    shard_attn_scores,
+    build_caption_groups,
+    select_unique_images,
+)
 from lib.tokenizers import get_tokenizer
 from torch.nn.utils import clip_grad_norm_
 
@@ -267,10 +276,11 @@ def validate(opt, val_loader, model):
     model.eval()
 
     with torch.no_grad():
-       img_embs, cap_embs, cap_lens = encode_data(model, val_loader, opt.log_step, logging.info)
+       img_embs, cap_embs, cap_lens, cap_img_ids = encode_data(model, val_loader, opt.log_step, logging.info)
 
-    # have repetitive image features
-    img_embs = img_embs[::5]
+    n_images = int(cap_img_ids.max().item()) + 1 if len(cap_img_ids) > 0 else 0
+    caption_groups = build_caption_groups(cap_img_ids, n_images=n_images)
+    img_embs = select_unique_images(img_embs, cap_img_ids, n_images=n_images)
 
     start_time = time.time()
 
@@ -305,11 +315,11 @@ def validate(opt, val_loader, model):
         # print(npts)
         
         # caption retrieval
-        (r1, r5, r10, medr, meanr) = i2t(npts, sims)
+        (r1, r5, r10, medr, meanr) = i2t(npts, sims, caption_groups=caption_groups)
         logging.info("Image to text (R@1, R@5, R@10): %.1f, %.1f, %.1f" % (r1, r5, r10))
 
         # image retrieval
-        (r1i, r5i, r10i, medri, meanr) = t2i(npts, sims)
+        (r1i, r5i, r10i, medri, meanr) = t2i(npts, sims, cap_img_ids=cap_img_ids.cpu().numpy())
         logging.info("Text to image (R@1, R@5, R@10): %.1f, %.1f, %.1f" % (r1i, r5i, r10i))
 
         # sum of recalls to be used for early stopping
