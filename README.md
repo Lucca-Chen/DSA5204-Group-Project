@@ -241,6 +241,12 @@ Two preparation scripts convert common raw releases into this format.
 
 ### Prepare IAPR TC-12
 
+To download the raw archive first:
+
+```bash
+qsub ./pbs/download_iapr_tc12_cpu.pbs
+```
+
 ```bash
 qsub ./pbs/prepare_iapr_tc12_cpu.pbs
 ```
@@ -284,6 +290,7 @@ qsub -v DATASET=rsicd,MODEL_VARIANT=laps,VIT_TYPE=vit ./pbs/eval_extra_dataset_s
 For convenience, the helper below submits the full five-row shared-backbone table for either dataset:
 
 ```bash
+./pbs/submit_iapr_tc12_chain.sh
 ./pbs/submit_extra_dataset_jobs.sh train_all iapr_tc12
 ./pbs/submit_extra_dataset_jobs.sh eval_all iapr_tc12
 ./pbs/submit_extra_dataset_jobs.sh train_all rsicd

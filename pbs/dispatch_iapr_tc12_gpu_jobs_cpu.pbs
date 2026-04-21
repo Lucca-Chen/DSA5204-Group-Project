@@ -1,0 +1,57 @@
+#!/bin/bash
+#PBS -N iapr-dispatch
+#PBS -q cpu_parallel
+#PBS -l select=1:ncpus=1:mem=4gb
+#PBS -l walltime=24:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+REPO_ROOT="${REPO_ROOT:-/nfs/home/svu/e1553870/DSA5204-Group-Project}"
+GPU_QUEUE="${GPU_QUEUE:-auto}"
+VIT_TYPE="${VIT_TYPE:-vit}"
+RUN_SUFFIX="${RUN_SUFFIX:-}"
+SUBMIT_RETRY_SECONDS="${SUBMIT_RETRY_SECONDS:-300}"
+
+LOG_ROOT="${LOG_ROOT:-/scratch/e1553870/DSA5204-Group-Project/output/iapr_dispatch}"
+mkdir -p "${LOG_ROOT}"
+LOG_PREFIX="${LOG_ROOT}/dispatch_iapr_tc12-${PBS_JOBID:-manual}"
+exec > >(tee -a "${LOG_PREFIX}.out") 2> >(tee -a "${LOG_PREFIX}.err" >&2)
+
+VARIANTS=(vsepp_shared scan_shared sgr_shared chan_shared laps)
+
+submit_with_retry() {
+  local cmd="$1"
+  while true; do
+    set +e
+    local out
+    out=$(eval "$cmd" 2>&1)
+    local status=$?
+    set -e
+    if [[ $status -eq 0 ]]; then
+      echo "$out"
+      return 0
+    fi
+    if grep -q "Required budget is not available" <<<"$out"; then
+      echo "[dispatch_iapr_tc12_gpu_jobs_cpu] budget unavailable, retry in ${SUBMIT_RETRY_SECONDS}s"
+      sleep "${SUBMIT_RETRY_SECONDS}"
+      continue
+    fi
+    echo "$out" >&2
+    return $status
+  done
+}
+
+echo "[dispatch_iapr_tc12_gpu_jobs_cpu] start=$(date -Is)"
+echo "[dispatch_iapr_tc12_gpu_jobs_cpu] host=$(hostname)"
+
+for variant in "${VARIANTS[@]}"; do
+  short_name="${variant%%_*}"
+  train_job=$(submit_with_retry "qsub -N iapr-${short_name} -q ${GPU_QUEUE} -v DATASET=iapr_tc12,MODEL_VARIANT=${variant},VIT_TYPE=${VIT_TYPE},RUN_SUFFIX=${RUN_SUFFIX} ${REPO_ROOT}/pbs/train_extra_dataset_shared_backbone.pbs")
+  echo "train_job_${variant}=${train_job}"
+
+  eval_job=$(submit_with_retry "qsub -N iapr-eval-${short_name} -q ${GPU_QUEUE} -W depend=afterok:${train_job} -v DATASET=iapr_tc12,MODEL_VARIANT=${variant},VIT_TYPE=${VIT_TYPE},RUN_SUFFIX=${RUN_SUFFIX} ${REPO_ROOT}/pbs/eval_extra_dataset_shared_backbone.pbs")
+  echo "eval_job_${variant}=${eval_job}"
+done
+
+echo "[dispatch_iapr_tc12_gpu_jobs_cpu] done=$(date -Is)"

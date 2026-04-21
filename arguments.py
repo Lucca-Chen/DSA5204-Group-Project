@@ -108,7 +108,7 @@ def get_argument_parser():
     
     parser.add_argument('--f30k_img_path', type=str, default='/home/fzr/data/flickr30k-images', help='the path of f30k images') 
     parser.add_argument('--coco_img_path', type=str, default='/home/fzr/data/coco/', help='the path of coco images') 
-    parser.add_argument('--iapr_img_path', type=str, default='/scratch/e1553870/datasets/iapr_tc12/images',
+    parser.add_argument('--iapr_img_path', type=str, default='/scratch/e1553870/datasets/iapr_tc12_raw',
                         help='the path of IAPR TC-12 images')
     parser.add_argument('--rsicd_img_path', type=str, default='/scratch/e1553870/datasets/rsicd/images',
                         help='the path of RSICD images')
@@ -142,7 +142,7 @@ def get_argument_parser():
     parser.add_argument('--amp_dtype', type=str, default='bf16', choices=['bf16', 'fp16'],
                         help='mixed precision dtype when --amp 1')
 
-    parser.add_argument('--bert_path', type=str, default='../weights_models/bert-base-uncased')    
+    parser.add_argument('--bert_path', type=str, default='bert-base-uncased')    
     parser.add_argument('--text_backbone', type=str, default='bert', choices=['bert', 'clip'],
                         help='text encoder backbone')
     parser.add_argument('--clip_model_name', type=str, default='openai/clip-vit-base-patch16',
@@ -177,7 +177,7 @@ def get_argument_parser():
                         help='override ratio regularization, default follows alignment_mode')
     parser.add_argument('--aggr_ratio', type=float, default=0.4, help='the aggr rate for visual token')
     parser.add_argument('--sparse_ratio', type=float, default=0.5, help='the sprase rate for visual token') 
-    parser.add_argument('--attention_weight', type=int, default=0.8, help='the weight of attention_map for mask prediction') 
+    parser.add_argument('--attention_weight', type=float, default=0.8, help='the weight of attention_map for mask prediction') 
     parser.add_argument('--ratio_weight', type=float, default=2.0, help='if use detach for kt loss')
 
     # grounding / Table 3

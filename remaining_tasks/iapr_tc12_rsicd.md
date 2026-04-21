@@ -12,13 +12,19 @@ cd ./DSA5204-Group-Project
 
 ### IAPR TC-12
 
-Place the unpacked raw data under a scratch directory such as:
+The repository now includes a direct download job for the raw IAPR TC-12 archive.
+
+```bash
+qsub -q auto_free ./pbs/download_iapr_tc12_cpu.pbs
+```
+
+By default it downloads `mentalomega/iapr-tc12` from Kaggle and extracts:
 
 ```bash
 /scratch/e1553870/datasets/iapr_tc12_raw
 ```
 
-The preparation script supports either:
+The preparation script then converts the raw benchmark into the repository retrieval format. It supports either:
 
 - caption sidecar files such as `*.eng` or `*.txt`, or
 - a structured annotation file passed through `ANNOTATION_FILE`
@@ -100,11 +106,10 @@ qsub -v DATASET=iapr_tc12,MODEL_VARIANT=laps,VIT_TYPE=swin ./pbs/train_extra_dat
 qsub -v DATASET=rsicd,MODEL_VARIANT=laps,VIT_TYPE=swin ./pbs/train_extra_dataset_shared_backbone.pbs
 ```
 
-To submit the full five-row shared-backbone table in one shot:
+To submit the full download → preparation → training → evaluation chain in one shot:
 
 ```bash
-./pbs/submit_extra_dataset_jobs.sh train_all iapr_tc12
-./pbs/submit_extra_dataset_jobs.sh eval_all iapr_tc12
+./pbs/submit_iapr_tc12_chain.sh
 ./pbs/submit_extra_dataset_jobs.sh train_all rsicd
 ./pbs/submit_extra_dataset_jobs.sh eval_all rsicd
 ```

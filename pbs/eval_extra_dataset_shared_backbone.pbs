@@ -22,6 +22,8 @@ DATA_PATH="${DATA_PATH:-data/}"
 TEST_SPLIT="${TEST_SPLIT:-test}"
 GPU_ID="${GPU_ID:-0}"
 SAVE_RESULTS="${SAVE_RESULTS:-1}"
+IAPR_IMG_PATH="${IAPR_IMG_PATH:-/scratch/e1553870/datasets/iapr_tc12_raw}"
+RSICD_IMG_PATH="${RSICD_IMG_PATH:-/scratch/e1553870/datasets/rsicd/images}"
 
 mkdir -p "${OUTPUT_ROOT}"
 LOG_PREFIX="${OUTPUT_ROOT}/${RUN_NAME}-${PBS_JOBID:-manual}"
@@ -55,6 +57,8 @@ CMD=(
   --gpu-id "${GPU_ID}"
   --split "${TEST_SPLIT}"
   --save_results "${SAVE_RESULTS}"
+  --iapr_img_path "${IAPR_IMG_PATH}"
+  --rsicd_img_path "${RSICD_IMG_PATH}"
   --model_paths "${MODEL_PATH}"
 )
 

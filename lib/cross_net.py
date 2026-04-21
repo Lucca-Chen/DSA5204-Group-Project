@@ -12,18 +12,20 @@ def is_sqr(n):
 
 
 class TokenSparse(nn.Module):
-    def __init__(self, embed_dim=512, sparse_ratio=0.6):
+    def __init__(self, embed_dim=512, sparse_ratio=0.6, attention_weight=0.8):
         super().__init__()
         
         self.embed_dim = embed_dim
         self.sparse_ratio = sparse_ratio
+        self.attention_weight = attention_weight
     
     def forward(self, tokens, attention_x, attention_y):
         
         B_v, L_v, C = tokens.size()
 
-        # (B_v, L_v)
-        score = attention_x + attention_y
+        # Balance the image self-saliency score with the caption-conditioned
+        # relevance score when selecting informative visual tokens.
+        score = (1.0 - self.attention_weight) * attention_x + self.attention_weight * attention_y
 
         num_keep_token = math.ceil(L_v * self.sparse_ratio)
     
@@ -125,6 +127,7 @@ class CrossSparseAggrNet_v2(nn.Module):
         if self.use_sparse:
             self.sparse_net = TokenSparse(embed_dim=self.hidden_dim,
                                           sparse_ratio=self.sparse_ratio,
+                                          attention_weight=self.attention_weight,
                                           )
         # aggregation network
         self.aggr_net = None
