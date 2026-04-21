@@ -7,3 +7,4 @@ output/
 *.pyo
 *.o*
 scripts/plot_f30k_shared_results.py
+data/iapr_tc12/

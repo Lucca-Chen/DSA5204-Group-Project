@@ -173,6 +173,15 @@ qsub ./pbs/download_scan_features_cpu.pbs
 
 This script downloads the SCAN-style precomputed region features used by methods such as HREM, TGDT, and detector-based CHAN.
 
+### Prepare TGDT Flickr30K inputs
+
+TGDT expects TERAN-style Flickr30K inputs with per-image `.npz` bottom-up features and a `dataset_flickr30k.json` annotation file. The helper below converts the downloaded SCAN-style arrays into that layout.
+
+```bash
+qsub ./pbs/prepare_tgdt_f30k_cpu.pbs
+qsub -W depend=afterok:<prep_jobid> ./pbs/train_f30k_tgdt_precomp.pbs
+```
+
 ### Download Table 3 grounding data
 
 ```bash

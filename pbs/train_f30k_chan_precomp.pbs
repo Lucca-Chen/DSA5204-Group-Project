@@ -1,0 +1,56 @@
+#!/bin/bash
+#PBS -N f30k-chan
+#PBS -l select=1:ncpus=8:ngpus=1:mem=64gb:gpu-type=nvidia
+#PBS -l walltime=18:00:00
+#PBS -j oe
+
+set -euo pipefail
+
+REPO_ROOT="/home/svu/e1553870/CHAN"
+DATA_ROOT="/scratch/e1553870/detector_butd/f30k"
+VOCAB_ROOT="/scratch/e1553870/detector_butd/vocab"
+RUN_ROOT="/scratch/e1553870/CHAN/checkpoints/f30k_bert"
+
+mkdir -p "$RUN_ROOT/log"
+mkdir -p "/scratch/e1553870/CHAN/output"
+
+cd "$REPO_ROOT"
+source /scratch/e1553870/venvs/dsa5204-laps/bin/activate
+
+export HF_HOME="/scratch/e1553870/.cache/huggingface"
+export TRANSFORMERS_CACHE="$HF_HOME"
+export TOKENIZERS_PARALLELISM=false
+export PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION=python
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+
+python train.py \
+  --data_path "$DATA_ROOT" \
+  --data_name f30k \
+  --text_enc_type bert \
+  --bert_path bert-base-uncased \
+  --vocab_path "$VOCAB_ROOT" \
+  --logger_name "$RUN_ROOT/log" \
+  --model_name "$RUN_ROOT" \
+  --num_epochs 25 \
+  --lr_update 15 \
+  --learning_rate 5e-4 \
+  --workers 8 \
+  --log_step 200 \
+  --embed_size 1024 \
+  --vse_mean_warmup_epochs 1 \
+  --batch_size 128 \
+  --coding_type VHACoding \
+  --alpha 0.1 \
+  --pooling_type MeanPooling \
+  --belta 0.1 \
+  --drop \
+  --criterion ContrastiveLoss \
+  --margin 0.05
+
+python eval.py \
+  --dataset f30k \
+  --model_path "$RUN_ROOT/model_best.pth" \
+  --data_path "$DATA_ROOT" \
+  --save_results
