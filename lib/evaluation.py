@@ -196,8 +196,7 @@ def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, s
     n_images = int(cap_img_ids.max().item()) + 1 if len(cap_img_ids) > 0 else 0
     logger.info('Images: %d, Captions: %d' % (n_images, cap_embs.shape[0]))
 
-    # for F30K, imgs 1000, captions 5000.
-    # for COCO, imgs 5000, captions 25000. (5-fold is five times of 1000 imgs)
+    # Flickr30K uses 1000 images and 5000 captions in the 1K test split.
 
     if not fold5:
         caption_groups = build_caption_groups(cap_img_ids, n_images=n_images)
@@ -267,13 +266,13 @@ def evalrank(model_path, model=None, data_path=None, split='dev', fold5=False, s
         logger.info("Text to image (R@1, R@5, R@10): %.1f %.1f %.1f" % mean_metrics[5:8])
 
 
-def i2t(npts, sims, return_ranks=False, mode='coco', caption_groups=None):
+def i2t(npts, sims, return_ranks=False, mode='five_caption', caption_groups=None):
 
     ranks = np.zeros(npts)
     top1 = np.zeros(npts)
 
     if caption_groups is None:
-        if mode == 'coco':
+        if mode == 'five_caption':
             caption_groups = [np.arange(5 * index, 5 * index + 5) for index in range(npts)]
         else:
             caption_groups = [np.asarray([index]) for index in range(npts)]
@@ -302,10 +301,10 @@ def i2t(npts, sims, return_ranks=False, mode='coco', caption_groups=None):
         return (r1, r5, r10, medr, meanr)
 
 
-def t2i(npts, sims, return_ranks=False, mode='coco', cap_img_ids=None):
+def t2i(npts, sims, return_ranks=False, mode='five_caption', cap_img_ids=None):
 
     if cap_img_ids is None:
-        if mode == 'coco':
+        if mode == 'five_caption':
             cap_img_ids = np.repeat(np.arange(npts), 5)
         else:
             cap_img_ids = np.arange(npts)

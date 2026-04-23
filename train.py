@@ -160,22 +160,10 @@ def main():
 
         model_path = os.path.join(base, 'model_best.pth')
         
-        # Save the final results for computing ensemble results
+        # Save the similarity matrix for this evaluation split.
         save_path = os.path.join(base, 'results_{}.npy'.format(opt.dataset))
 
-        if opt.dataset == 'coco' and opt.test_split == 'testall':
-            # Evaluate COCO 5-fold 1K
-            evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=True)
-
-            # Evaluate COCO 5K
-            evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=False, save_path=save_path)
-
-            if opt.evaluate_cxc:
-                # Evaluate COCO-trained models on CxC
-                evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=True, cxc=True)
-
-        else:
-            evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=False, save_path=save_path)
+        evaluation.evalrank(model_path, model=model_without_ddp, split=opt.test_split, fold5=False, save_path=save_path)
 
         logger.info('Evaluation finish!')    
 

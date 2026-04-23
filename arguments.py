@@ -8,11 +8,6 @@ ALIGNMENT_PRESETS = {
         'use_aggr': True,
         'use_ratio_loss': True,
     },
-    'sparse': {
-        'use_sparse': True,
-        'use_aggr': False,
-        'use_ratio_loss': False,
-    },
     'basealign': {
         'use_sparse': False,
         'use_aggr': False,
@@ -23,8 +18,6 @@ ALIGNMENT_PRESETS = {
 SIM_HEAD_PRESETS = {
     'global',
     'max_mean',
-    'scan_t2i',
-    'scan_i2t',
     'scan_all',
     'sgr',
     'chan_mean',
@@ -47,14 +40,6 @@ MODEL_VARIANTS = {
         'alignment_mode': 'basealign',
         'sim_head': 'chan_mean',
     },
-    'basealign': {
-        'alignment_mode': 'basealign',
-        'sim_head': 'max_mean',
-    },
-    'sparse': {
-        'alignment_mode': 'sparse',
-        'sim_head': 'max_mean',
-    },
     'laps': {
         'alignment_mode': 'laps',
         'sim_head': 'max_mean',
@@ -66,15 +51,7 @@ DATASET_SPLITS = {
         'val_split': 'dev',
         'test_split': 'test',
     },
-    'coco': {
-        'val_split': 'dev',
-        'test_split': 'testall',
-    },
     'iapr_tc12': {
-        'val_split': 'dev',
-        'test_split': 'test',
-    },
-    'rsicd': {
         'val_split': 'dev',
         'test_split': 'test',
     },
@@ -86,7 +63,8 @@ def get_argument_parser():
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--data_path', default='data/', type=str, help='path to datasets')
-    parser.add_argument('--dataset', default='f30k', help='dataset name, e.g. f30k, coco, iapr_tc12, or rsicd')
+    parser.add_argument('--dataset', default='f30k', choices=sorted(DATASET_SPLITS.keys()),
+                        help='dataset name: f30k or iapr_tc12')
 
     parser.add_argument('--margin', default=0.2, type=float, help='Rank loss margin.')
     parser.add_argument('--num_epochs', default=30, type=int, help='Number of training epochs.')
@@ -106,12 +84,9 @@ def get_argument_parser():
     parser.add_argument('--vse_mean_warmup_epochs', type=int, default=1, help='The number of warmup epochs using mean vse loss')
     parser.add_argument('--embedding_warmup_epochs', type=int, default=0, help='The number of epochs for warming up the embedding layer')      
     
-    parser.add_argument('--f30k_img_path', type=str, default='/home/fzr/data/flickr30k-images', help='the path of f30k images') 
-    parser.add_argument('--coco_img_path', type=str, default='/home/fzr/data/coco/', help='the path of coco images') 
-    parser.add_argument('--iapr_img_path', type=str, default='/scratch/e1553870/datasets/iapr_tc12_raw',
+    parser.add_argument('--f30k_img_path', type=str, default='data/flickr30k-images', help='the path of f30k images') 
+    parser.add_argument('--iapr_img_path', type=str, default='data/iapr_tc12/images',
                         help='the path of IAPR TC-12 images')
-    parser.add_argument('--rsicd_img_path', type=str, default='/scratch/e1553870/datasets/rsicd/images',
-                        help='the path of RSICD images')
     
     # vision transformer
     parser.add_argument('--img_res', type=int, default=224, help='the image resolution for ViT input') 
@@ -133,7 +108,6 @@ def get_argument_parser():
     parser.add_argument('--eval', type=int, default=1, help='whether evaluation after training process')
 
     parser.add_argument('--save_results', type=int, default=1, help='whether save the evaluation results')
-    parser.add_argument('--evaluate_cxc', type=int, default=0, help='the special evaluation for MS-COCO')
     parser.add_argument('--gpu-id', type=int, default=0, help='the gpu-id for runing')
     parser.add_argument('--resume', type=str, default='', help='checkpoint path to resume from')
     parser.add_argument('--save_last_checkpoint', type=int, default=1,
@@ -143,14 +117,8 @@ def get_argument_parser():
                         help='mixed precision dtype when --amp 1')
 
     parser.add_argument('--bert_path', type=str, default='bert-base-uncased')    
-    parser.add_argument('--text_backbone', type=str, default='bert', choices=['bert', 'clip'],
-                        help='text encoder backbone')
-    parser.add_argument('--clip_model_name', type=str, default='openai/clip-vit-base-patch16',
-                        help='Hugging Face CLIP model name for CLIP-based retrieval and grounding')
-    parser.add_argument('--clip_max_text_len', type=int, default=77,
-                        help='maximum CLIP text length')
     parser.add_argument('--model_variant', type=str, default=None, choices=sorted(MODEL_VARIANTS.keys()),
-                        help='shared-backbone preset, e.g. vsepp_shared, scan_shared, sgr_shared, chan_shared, basealign, sparse, or laps')
+                        help='shared-backbone preset, e.g. vsepp_shared, scan_shared, sgr_shared, chan_shared, or laps')
     parser.add_argument('--sim_head', type=str, default=None, choices=sorted(SIM_HEAD_PRESETS),
                         help='similarity head, default follows model_variant')
     parser.add_argument('--val_split', type=str, default=None, help='validation split, default follows dataset')
@@ -168,7 +136,7 @@ def get_argument_parser():
 
     # cross-modal alignment
     parser.add_argument('--alignment_mode', type=str, default=None, choices=sorted(ALIGNMENT_PRESETS.keys()),
-                        help='preset for fair comparison: laps, sparse, or basealign')
+                        help='preset for fair comparison: laps or basealign')
     parser.add_argument('--use_sparse', type=int, choices=[0, 1], default=None,
                         help='override sparse token selection, default follows alignment_mode')
     parser.add_argument('--use_aggr', type=int, choices=[0, 1], default=None,
@@ -176,25 +144,9 @@ def get_argument_parser():
     parser.add_argument('--use_ratio_loss', type=int, choices=[0, 1], default=None,
                         help='override ratio regularization, default follows alignment_mode')
     parser.add_argument('--aggr_ratio', type=float, default=0.4, help='the aggr rate for visual token')
-    parser.add_argument('--sparse_ratio', type=float, default=0.5, help='the sprase rate for visual token') 
+    parser.add_argument('--sparse_ratio', type=float, default=0.5, help='the sparse rate for visual token') 
     parser.add_argument('--attention_weight', type=float, default=0.8, help='the weight of attention_map for mask prediction') 
     parser.add_argument('--ratio_weight', type=float, default=2.0, help='if use detach for kt loss')
-
-    # grounding / Table 3
-    parser.add_argument('--ref_root', type=str, default='/scratch/e1553870/datasets/refcoco_raw',
-                        help='root directory of RefCOCO/RefCOCO+/RefCOCOg annotations')
-    parser.add_argument('--grounding_split_by', type=str, default='',
-                        help='splitBy for RefCOCO datasets, e.g. unc or umd')
-    parser.add_argument('--grounding_proposal_source', type=str, default='coco_gt', choices=['coco_gt', 'json'],
-                        help='proposal source for grounding evaluation')
-    parser.add_argument('--grounding_proposal_path', type=str, default='',
-                        help='optional external proposal file in json format')
-    parser.add_argument('--grounding_iou_thresh', type=float, default=0.5,
-                        help='IoU threshold for visual grounding accuracy')
-    parser.add_argument('--grounding_alpha', type=float, default=1.0,
-                        help='weight for the Grad-GAM proposal score')
-    parser.add_argument('--grounding_beta', type=float, default=0.0,
-                        help='optional weight for a global retrieval compatibility score')
 
     return parser
 

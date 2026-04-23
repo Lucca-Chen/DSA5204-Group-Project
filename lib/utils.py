@@ -500,9 +500,6 @@ class SyncFunction(torch.autograd.Function):
         return grad_input[idx_from:idx_to]
     
 
-# come from
-# https://github.com/openai/CLIP/issues/111#issuecomment-931955836
-# return AllGatherFunction.apply(tensor)
 class AllGatherFunction(torch.autograd.Function):
     
     @staticmethod

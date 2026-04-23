@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from transformers import BertModel, CLIPTextModel, CLIPVisionModel, SwinModel, ViTModel
+from transformers import BertModel, SwinModel, ViTModel
 import logging
 
 from lib.tokenizers import get_tokenizer
@@ -27,23 +27,15 @@ class VisionTransEncoder(nn.Module):
 
         self.opt = opt
 
-        if 'clip' in opt.vit_type:
-            self.visual_encoder = CLIPVisionModel.from_pretrained(opt.clip_model_name)
-            image_size = int(self.visual_encoder.config.image_size)
-            patch_size = int(self.visual_encoder.config.patch_size)
-            opt.num_patches = (image_size // patch_size) ** 2
-            print('clip vision model')
-        elif 'swin' in opt.vit_type:
+        if 'swin' in opt.vit_type:
             # img_res 224 * 224, 7*7 patch
             self.visual_encoder = SwinModel.from_pretrained("microsoft/swin-base-patch4-window7-224")
-            # self.visual_encoder = SwinModel.from_pretrained("../weights_models/microsoft--swin-base-patch4-window7-224")
             opt.num_patches = 49
             print('swin model')
         #  ViT model
         else:              
             # img_res 224 * 224, 14*14 patch
             self.visual_encoder = ViTModel.from_pretrained("google/vit-base-patch16-224-in21k")
-            # self.visual_encoder = ViTModel.from_pretrained("../weights_models/google--vit-base-patch16-224-in21k")
             opt.num_patches = 196
             print('vit model')
 
@@ -116,38 +108,7 @@ class EncoderText_BERT(nn.Module):
             param.requires_grad = True  
 
 
-class EncoderText_CLIP(nn.Module):
-    def __init__(self, opt):
-        super().__init__()
-
-        self.opt = opt
-        self.embed_size = opt.embed_size
-        self.tokenizer = get_tokenizer(opt)
-        self.text_model = CLIPTextModel.from_pretrained(opt.clip_model_name)
-
-        if opt.embed_size == self.text_model.config.hidden_size:
-            self.fc = nn.Identity()
-        else:
-            self.fc = nn.Linear(self.text_model.config.hidden_size, opt.embed_size)
-
-    def forward(self, x, lengths):
-        token_index = torch.arange(x.size(1), device=x.device).unsqueeze(0)
-        attention_mask = token_index < lengths.unsqueeze(1)
-        text_emb = self.text_model(input_ids=x, attention_mask=attention_mask)[0]
-        return self.fc(text_emb)
-
-    def freeze_backbone(self):
-        for param in self.text_model.parameters():
-            param.requires_grad = False
-
-    def unfreeze_backbone(self):
-        for param in self.text_model.parameters():
-            param.requires_grad = True
-
-
 def get_text_encoder(opt):
-    if getattr(opt, 'text_backbone', 'bert') == 'clip':
-        return EncoderText_CLIP(opt)
     return EncoderText_BERT(opt)
 
 

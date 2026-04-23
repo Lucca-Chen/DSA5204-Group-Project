@@ -16,20 +16,14 @@ logger = logging.getLogger(__name__)
 
 DATASET_IMAGE_BASES = {
     'f30k': 'f30k_img_path',
-    'coco': 'coco_img_path',
     'iapr_tc12': 'iapr_img_path',
-    'rsicd': 'rsicd_img_path',
 }
 
 
-def build_transforms(img_size=224, is_train=True, is_clip=False):
+def build_transforms(img_size=224, is_train=True):
 
-    if is_clip:
-        mean = [0.48145466, 0.4578275, 0.40821073]
-        std = [0.26862954, 0.26130258, 0.27577711]
-    else:
-        mean = [0.485, 0.456, 0.406]
-        std = [0.229, 0.224, 0.225]
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
 
     if not is_train:
         transform = T.Compose([
@@ -61,7 +55,6 @@ class RawImageDataset(data.Dataset):
         self.train = train
 
         # f30k: 31014 imgs, 145000 train_captions
-        # coco: 119287 imgs, 
         loc = os.path.join(opt.data_path, opt.dataset)
 
         image_base_key = DATASET_IMAGE_BASES.get(opt.dataset)
@@ -105,7 +98,6 @@ class RawImageDataset(data.Dataset):
         self.preprocess = build_transforms(
             img_size=opt.img_res,
             is_train=train,
-            is_clip=('clip' in getattr(opt, 'vit_type', '')),
         )
         
         self.length = len(self.captions)
@@ -142,7 +134,7 @@ def build_collate_fn(tokenizer):
     pad_token_id = tokenizer_utils.get_pad_token_id(tokenizer)
 
     def collate_fn_ours(data):
-        # Sort a data list by caption length, for GRU/BERT/CLIP text encoder.
+        # Sort a data list by caption length for the BERT text encoder.
         data.sort(key=lambda x: len(x[1]), reverse=True)
 
         images, captions, ids, img_ids = zip(*data)

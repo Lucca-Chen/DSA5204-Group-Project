@@ -94,7 +94,7 @@ class TripletLoss(nn.Module):
         self.cut_off = 0.5
         self.d = 512
 
-        self.nonzero_loss_cutoff = 1.9 if opt.dataset == 'coco' else 1.7      
+        self.nonzero_loss_cutoff = 1.7      
         
     def forward(self, im, s, img_ids, sim_mat=None):
 
@@ -122,7 +122,7 @@ class TripletLoss(nn.Module):
         # but works with embeddings of any dimensionality and any distance metric.
         # from https://kevinmusgrave.github.io/pytorch-metric-learning/miners/
 
-        # our dimension is 1024, belong to high dimensionality
+        # Distance-weighted sampling is less reliable for high-dimensional embeddings.
         dist = (2 - 2 * sim_mat).sqrt()
         dist = dist.clamp(min=self.cut_off)
 
